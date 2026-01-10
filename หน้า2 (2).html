@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ห้องทั้งหมด</title>
+<style>
+*{box-sizing:border-box;font-family:sans-serif}
+body{margin:0;background:#ffb6d9;min-height:100vh;padding:20px 60px 80px 20px}
+h2{text-align:center;color:#fff}
+.top{display:flex;gap:10px;margin-bottom:15px}
+input,button{padding:10px;border-radius:10px;border:none;font-weight:bold}
+button{background:#ff4d94;color:#fff;cursor:pointer}
+.room-list{display:flex;flex-direction:column;gap:12px}
+.room{background:#fff;border-radius:12px;padding:12px;box-shadow:0 4px 10px rgba(0,0,0,.2);cursor:pointer}
+.hidden{display:none}
+.container{max-width:900px;margin:auto}
+.room-header{display:flex;justify-content:space-between;align-items:center;background:#1c1c1c;padding:10px 15px;border-radius:10px;color:#fff}
+.owner-controls button{background:#00ff99;color:#000;margin-left:5px}
+.camera-area{margin-top:15px;background:#000;border-radius:12px;height:220px;display:none;align-items:center;justify-content:center}
+.camera-area video{width:100%;height:100%;object-fit:cover;border-radius:12px}
+.chat-box{margin-top:10px;background:#1c1c1c;border-radius:10px;padding:10px;height:200px;overflow-y:auto;color:#fff;display:flex;flex-direction:column-reverse}
+.chat-input{display:flex;margin-top:10px;gap:10px}
+.chat-input input{flex:1}
+#bottomNav{
+    position:fixed;bottom:0;left:0;width:100%;background:#ff4d94;
+    display:flex;justify-content:space-around;padding:10px 0;
+    border-top-left-radius:12px;border-top-right-radius:12px;box-shadow:0 -3px 10px rgba(0,0,0,0.2);
+}
+#bottomNav button{flex:1;color:#fff;font-weight:bold;background:none;border:none;cursor:pointer}
+</style>
+</head>
+<body>
+
+<h2>รายชื่อห้อง</h2>
+
+<div id="listBox">
+    <div class="top">
+        <input id="search" placeholder="ค้นหา ID หรือชื่อห้อง">
+        <button onclick="renderRooms()">🔍 ค้นหา</button>
+        <button onclick="showOpen()">➕ เปิดห้อง</button>
+    </div>
+    <div id="roomList" class="room-list"></div>
+</div>
+
+<div id="openBox" class="hidden">
+    <input id="roomName" placeholder="ชื่อห้อง">
+    <input id="roomId" placeholder="ID ห้อง (8 ตัว)">
+    <button onclick="setLock(false)">🔓 ไม่ล็อค</button>
+    <button onclick="setLock(true)">🔒 ล็อค</button>
+    <input id="roomPass" class="hidden" placeholder="รหัส 6 ตัว">
+    <button onclick="openRoom()">เปิดห้อง</button>
+    <button onclick="back()">⬅ กลับ</button>
+</div>
+
+<div id="roomBox" class="hidden container">
+    <div class="room-header">
+        <div>
+            <b id="showRoomName"></b>
+            <div style="font-size:13px;color:#aaa">
+                ID ห้อง: <span id="showRoomId"></span> | 👥 <span id="showRoomCount">0</span> คน
+            </div>
+        </div>
+        <div id="ownerControls" class="owner-controls hidden">
+            <button onclick="toggleCam()">🎥 กล้อง</button>
+            <button onclick="closeRoom()">❌ ปิดห้อง</button>
+        </div>
+    </div>
+    <div id="cameraArea" class="camera-area">
+        <video id="cameraVideo" autoplay playsinline></video>
+    </div>
+    <div id="chatBox" class="chat-box"></div>
+    <div class="chat-input">
+        <input id="chatInput" placeholder="พิมพ์ข้อความ...">
+        <button onclick="sendChat()">ส่ง</button>
+        <button onclick="exitRoom()">ออก</button>
+    </div>
+</div>
+
+<div id="bottomNav">
+    <button onclick="showPage('home')">🏠 หน้าแรก</button>
+    <button onclick="showPage('chat')">💬 แชท</button>
+    <button onclick="showPage('account')">👤 บัญชี</button>
+</div>
+
+<script>
+let locked=false,currentRoomId=null,camOn=false,cameraStream=null;
+let username=localStorage.getItem("username");
+if(!username){username=prompt("ชื่อผู้ใช้ของคุณ");localStorage.setItem("username",username);}
+
+const roomList=document.getElementById("roomList");
+const search=document.getElementById("search");
+
+// ===== SYNC FUNCTION =====
+function syncRooms(){
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    // อัปเดตรายชื่อผู้เข้าห้อง
+    if(currentRoomId){
+        const room=rooms.find(r=>r.id===currentRoomId);
+        if(room){
+            showRoomCount.innerText=room.users.length;
+            renderChat(room);
+            if(room.owner!==username){ // ถ้าไม่ใช่เจ้าของ
+                cameraArea.style.display=room.camOn?"flex":"none";
+            }
+        }
+    }
+    renderRoomsList(rooms);
+}
+function renderRoomsList(rooms){
+    const filter = search.value.trim().toLowerCase();
+    roomList.innerHTML="";
+    rooms.filter(r=>r.name.toLowerCase().includes(filter)||r.id.toLowerCase().includes(filter))
+        .forEach(r=>{
+        const d=document.createElement("div");
+        d.className="room";
+        d.innerHTML=`<b>${r.name}</b><br><small>ID: ${r.id} | 👥 ${r.users.length} คน | ${r.locked?"🔒 ล็อค":"🔓 ไม่ล็อค"}</small>`;
+        d.onclick=()=>enterRoom(r.id);
+        roomList.appendChild(d);
+    });
+}
+
+// ===== RENDER CHAT =====
+function renderChat(room){
+    chatBox.innerHTML="";
+    room.chats.slice().reverse().forEach(c=>{
+        const d=document.createElement("div");
+        d.innerText=c;
+        chatBox.appendChild(d);
+    });
+}
+
+// ===== OPEN / BACK =====
+function showOpen(){listBox.classList.add("hidden");openBox.classList.remove("hidden");}
+function back(){openBox.classList.add("hidden");listBox.classList.remove("hidden");}
+function setLock(l){locked=l;roomPass.classList.toggle("hidden",!l);}
+
+// ===== CREATE ROOM =====
+function openRoom(){
+    const name=roomName.value.trim(),id=roomId.value.trim(),pass=roomPass.value.trim();
+    if(!name||id.length!==8) return alert("ข้อมูลไม่ถูกต้อง");
+    if(locked&&pass.length!==6) return alert("รหัสต้อง 6 ตัว");
+
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    if(rooms.some(r=>r.id===id)) return alert("ID ห้องนี้ถูกใช้งานแล้ว");
+
+    rooms.push({id,name,locked,password:locked?pass:"",owner:username,users:[username],chats:[],camOn:false});
+    localStorage.setItem("rooms",JSON.stringify(rooms));
+    renderRooms();
+    enterRoom(id);
+}
+
+// ===== ENTER ROOM =====
+function enterRoom(id){
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    const room=rooms.find(r=>r.id===id);
+    if(!room) return;
+    if(room.locked){
+        const p=prompt("ใส่รหัสห้อง");
+        if(p!==room.password) return alert("รหัสผิด");
+    }
+    if(!room.users.includes(username)) room.users.push(username);
+    localStorage.setItem("rooms",JSON.stringify(rooms));
+    currentRoomId=id;
+
+    listBox.classList.add("hidden"); openBox.classList.add("hidden"); roomBox.classList.remove("hidden");
+    showRoomName.innerText=room.name+(room.locked?" 🔒":""); showRoomId.innerText=room.id;
+    ownerControls.classList.toggle("hidden",room.owner!==username);
+
+    cameraArea.style.display=(room.owner===username && room.camOn)?'flex':'none';
+    renderChat(room);
+}
+
+// ===== CHAT =====
+function sendChat(){
+    if(!chatInput.value) return;
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    const room=rooms.find(r=>r.id===currentRoomId);
+    room.chats.push(username+": "+chatInput.value);
+    if(room.chats.length>5) room.chats.shift();
+    localStorage.setItem("rooms",JSON.stringify(rooms));
+    renderChat(room);
+    chatInput.value="";
+}
+
+// ===== CAM =====
+function toggleCam(){
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    const room=rooms.find(r=>r.id===currentRoomId);
+    if(!room||room.owner!==username) return;
+    if(!camOn){
+        navigator.mediaDevices.getUserMedia({video:true}).then(s=>{
+            cameraStream=s; cameraVideo.srcObject=s; cameraArea.style.display="flex"; camOn=true;
+            room.camOn=true; localStorage.setItem("rooms",JSON.stringify(rooms));
+        });
+    }else{
+        cameraStream.getTracks().forEach(t=>t.stop());
+        cameraVideo.srcObject=null; cameraArea.style.display="none"; camOn=false;
+        room.camOn=false; localStorage.setItem("rooms",JSON.stringify(rooms));
+    }
+}
+
+// ===== CLOSE / EXIT =====
+function closeRoom(){
+    if(!confirm("ปิดห้อง?")) return;
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    rooms=rooms.filter(r=>r.id!==currentRoomId);
+    localStorage.setItem("rooms",JSON.stringify(rooms));
+    currentRoomId=null; roomBox.classList.add("hidden"); listBox.classList.remove("hidden");
+}
+function exitRoom(){
+    if(cameraStream) cameraStream.getTracks().forEach(t=>t.stop()); camOn=false;
+    let rooms=JSON.parse(localStorage.getItem("rooms")||"[]");
+    const room=rooms.find(r=>r.id===currentRoomId);
+    if(room) room.users=room.users.filter(u=>u!==username);
+    localStorage.setItem("rooms",JSON.stringify(rooms));
+    currentRoomId=null; roomBox.classList.add("hidden"); listBox.classList.remove("hidden");
+}
+
+// ===== BOTTOM NAV =====
+function showPage(page){
+    if(page==="home"){listBox.classList.remove("hidden"); roomBox.classList.add("hidden"); openBox.classList.add("hidden");}
+    else if(page==="chat"){alert("หน้าแชทยังไม่แยก (เข้าผ่านห้องได้)");}
+    else if(page==="account"){alert("บัญชีผู้ใช้: "+username);}
+}
+
+// ===== REALTIME SYNC =====
+setInterval(syncRooms,1000);
+renderRooms();
+</script>
+</body>
+</html>
